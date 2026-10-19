@@ -10,6 +10,7 @@
 #include "InputAction.h"
 #include "EnhancedInputComponent.h"          // FInputBindingHandle / UEnhancedInputComponent（值类型，需完整定义）
 #include "Engine/Texture2D.h"                // UTexture2D（Icon 字段完整定义）
+#include "UITypes.h"
 #include "InteractionComponent.generated.h"
 
 
@@ -17,6 +18,9 @@ class UInteractableComponent;
 class UInputAction;
 class UEnhancedInputComponent;
 class UInteractionWidget;
+class UInteractionOptionsWidget;
+class UUISubsystem;
+class APawn;
 
 // -------------------------------------------------------------------------
 // 检测模式
@@ -26,8 +30,8 @@ class UInteractionWidget;
 UENUM(BlueprintType)
 enum class EInteractionTraceMode : uint8
 {
-	FirstPerson  UMETA(DisplayName = "第一人称"),
-	ThirdPerson  UMETA(DisplayName = "第三人称")
+	FirstPerson UMETA(DisplayName = "第一人称"),
+	ThirdPerson UMETA(DisplayName = "第三人称")
 };
 
 // -------------------------------------------------------------------------
@@ -139,11 +143,11 @@ public:
 	// --------------------------------------------------------------------
 
 	/**
-	 * @brief 对当前焦点目标使用默认 Tag 触发交互。
+	 * @brief 对当前焦点目标发起交互；多有效选项打开菜单，否则沿用默认 Tag。
 	 *
 	 * 蓝图可调用的入口。通常绑定到输入操作。
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Interaction")
+	UFUNCTION(BlueprintCallable, Category = "Interaction", meta = (ToolTip = "对当前焦点目标发起交互；多有效选项打开菜单，否则沿用默认 Tag。"))
 	void TryInteract();
 
 	/**
@@ -153,6 +157,18 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Interaction", meta = (AutoCreateRefTerm = "InteractionTag"))
 	void TryInteractWithTag(const FGameplayTag& InteractionTag);
+
+	/** 选择当前前台菜单中的显式动作；仅在关闭已同步提交并通过上下文复检后发送，不表示玩法成功。 */
+	UFUNCTION(BlueprintCallable, Category = "Interaction|UI", meta = (ToolTip = "选择当前前台菜单中的显式动作；仅在关闭已同步提交并通过上下文复检后发送，不表示玩法成功。"))
+	bool SelectInteractionOption(const FGameplayTag& InteractionTag);
+
+	/** 取消当前选项菜单并清除捕获上下文，不执行交互。 */
+	UFUNCTION(BlueprintCallable, Category = "Interaction|UI", meta = (ToolTip = "取消当前选项菜单并清除捕获上下文，不执行交互。"))
+	void CancelInteractionOptions();
+
+	/** 查询选项菜单是否已打开；被更高界面挂起时仍返回真。 */
+	UFUNCTION(BlueprintPure, Category = "Interaction|UI", meta = (ToolTip = "查询选项菜单是否已打开；被更高界面挂起时仍返回真。"))
+	bool IsInteractionOptionsOpen() const;
 
 	// --------------------------------------------------------------------
 	// 长按交互
@@ -181,11 +197,11 @@ public:
 
 	/** 是否正在长按累积中 */
 	UFUNCTION(BlueprintPure, Category = "Interaction|Hold")
-	bool IsHolding() const { return bIsHolding; }
+	bool IsHolding() const{ return bIsHolding; }
 
 	/** 当前长按的目标累积总时长（秒），未在长按时为 0 */
 	UFUNCTION(BlueprintPure, Category = "Interaction|Hold")
-	float GetCurrentHoldTime() const { return CurrentHoldTime; }
+	float GetCurrentHoldTime() const{ return CurrentHoldTime; }
 
 	/** 当前长按进度（0-1，未在长按时为 0），供 UI Tick 查询绘制读条 */
 	UFUNCTION(BlueprintPure, Category = "Interaction|Hold")
@@ -199,7 +215,7 @@ public:
 	 * @brief 启用或禁用玩家侧的整个交互能力。
 	 *
 	 * 关闭时：跳过检测、清除当前焦点、拒绝所有交互入口（含长按）。
-	 * 适用于过场动画、UI 打开、对话进行等需要静默交互的场景。
+	 * 适用于玩法主动禁用交互；UI 阻止由独立策略管理，不覆盖此业务开关。
 	 * 重新开启后下一帧自动恢复检测。
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Interaction")
@@ -207,7 +223,15 @@ public:
 
 	/** 玩家侧交互是否启用 */
 	UFUNCTION(BlueprintPure, Category = "Interaction")
-	bool IsInteractionEnabled() const { return bInteractionEnabled; }
+	bool IsInteractionEnabled() const{ return bInteractionEnabled; }
+
+	/** 设置 UI 输入阻止状态，不改变业务开关，也不广播业务开关事件。 */
+	UFUNCTION(BlueprintCallable, Category = "Interaction|UI", meta = (ToolTip = "设置 UI 输入阻止状态，不改变业务开关，也不广播业务开关事件。"))
+	void SetUIInteractionBlocked(bool bBlocked);
+
+	/** 查询业务开关与 UI 输入策略共同决定的有效交互允许状态。 */
+	UFUNCTION(BlueprintPure, Category = "Interaction", meta = (ToolTip = "查询业务开关与 UI 输入策略共同决定的有效交互允许状态。"))
+	bool IsInteractionEffectivelyEnabled() const{ return bInteractionEnabled && !bUIInteractionBlocked; }
 
 	/** 强制立即刷新焦点检测 */
 	UFUNCTION(BlueprintCallable, Category = "Interaction")
@@ -226,7 +250,7 @@ public:
 
 	/** 返回当前检测模式 */
 	UFUNCTION(BlueprintPure, Category = "Interaction|Trace")
-	EInteractionTraceMode GetTraceMode() const { return TraceMode; }
+	EInteractionTraceMode GetTraceMode() const{ return TraceMode; }
 
 	/**
 	 * @brief 按需查询周围可交互物品数组（从不缓存，每次调用实时查询）。
@@ -238,6 +262,16 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Interaction|Trace")
 	TArray<FInteractionCandidate> GetNearbyInteractables() const;
+
+	/**
+	 * @brief 从当前本地 Pawn 查询附近可见候选，仅供 UI 读取，不执行交互或改变焦点。
+	 * @param Searcher 此组件所属本地控制器当前控制的 Pawn，失效或更换后旧 Pawn 返回空数组。
+	 * @return 以 Pawn 位置为原点、TraceDistance 为半径的实时整球候选，去重并按距离升序返回。
+	 * 只绕过 UI 输入阻止；手动禁用、组件结束及目标禁用仍生效，遮挡使用 UIQueryVisibilityChannel。
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintPure = false, Category = "Interaction|UI",
+		meta = (ToolTip = "从当前本地 Pawn 查询附近可见候选，仅供 UI 读取，不执行交互或改变焦点。只绕过 UI 输入阻止；手动禁用、组件结束及目标禁用仍生效。"))
+	TArray<FInteractionCandidate> QueryNearbyInteractablesForUI(APawn* Searcher) const;
 
 	/** 检测模式发生切换时广播 */
 	UPROPERTY(BlueprintAssignable, Category = "Interaction|Trace")
@@ -253,19 +287,19 @@ public:
 
 	/** 当前绑定的点按交互 Action（供外部读取） */
 	UFUNCTION(BlueprintPure, Category = "Interaction|Input")
-	UInputAction* GetInteractAction() const { return InteractAction; }
+	UInputAction* GetInteractAction() const{ return InteractAction; }
 
 	/** 点按交互 Action 的提示图标（供交互提示 UI 读取） */
 	UFUNCTION(BlueprintPure, Category = "Interaction|Input")
-	UTexture2D* GetInteractActionIcon() const { return InteractActionIcon; }
+	UTexture2D* GetInteractActionIcon() const{ return InteractActionIcon; }
 
 	/** 周围检测 Action 的提示图标 */
 	UFUNCTION(BlueprintPure, Category = "Interaction|Input")
-	UTexture2D* GetQueryActionIcon() const { return QueryActionIcon; }
+	UTexture2D* GetQueryActionIcon() const{ return QueryActionIcon; }
 
 	/** 长按 Action 的提示图标 */
 	UFUNCTION(BlueprintPure, Category = "Interaction|Input")
-	UTexture2D* GetHoldActionIcon() const { return HoldActionIcon; }
+	UTexture2D* GetHoldActionIcon() const{ return HoldActionIcon; }
 
 	// --------------------------------------------------------------------
 	// 交互提示 Widget 生命周期（V2.1 新增）
@@ -275,9 +309,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Interaction|UI")
 	TSubclassOf<UInteractionWidget> InteractionWidgetClass = nullptr;
 
-	/** Widget 添加到视口的 ZOrder（数值越大越在上层） */
+	/** 多选项菜单表现类，留空使用原生列表；会话与输入策略仍由 UISystem 管理。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Interaction|UI", meta = (ToolTip = "多选项菜单表现类，留空使用原生列表；会话与输入策略仍由 UISystem 管理。"))
+	TSubclassOf<UInteractionOptionsWidget> OptionsWidgetClass = nullptr;
+
+	/** 旧资产兼容字段；提示层级现在由 UISystem 的 HUD 策略决定。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Interaction|UI",
-		meta = (ClampMin = "0"))
+		meta = (ClampMin = "0", DeprecatedProperty, DeprecationMessage = "提示层级由 UISystem HUD 策略决定。", ToolTip = "旧资产兼容字段；提示层级现在由 UISystem 的 HUD 策略决定。"))
 	int32 InteractionWidgetZOrder = 0;
 
 	/** 已创建的 Widget 实例（运行时只读，蓝图可用于查询状态） */
@@ -369,7 +407,7 @@ protected:
 	 * @brief 点按"周围检测"输入的处理函数。
 	 *
 	 * 调用 GetNearbyInteractables() 收集候选并广播 OnNearbyQueried。
-	 * bInteractionEnabled 为 false 时直接返回。
+	 * 有效交互允许状态为 false 时直接返回。
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Interaction|Input")
 	void HandleNearbyQuery();
@@ -417,6 +455,10 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Interaction|Trace")
 	TEnumAsByte<ECollisionChannel> TraceChannel = ECC_GameTraceChannel2;
 
+	/** UI 只读查询的遮挡射线通道；墙体须阻挡此通道，默认使用可见性通道。 */
+	UPROPERTY(EditDefaultsOnly, Category = "Interaction|Trace", meta = (ToolTip = "UI 只读查询的遮挡射线通道；墙体须阻挡此通道，默认使用可见性通道。"))
+	TEnumAsByte<ECollisionChannel> UIQueryVisibilityChannel = ECC_Visibility;
+
 	/** 自动射线扫描间隔（秒，0 = 每帧检测） */
 	UPROPERTY(EditDefaultsOnly, Category = "Interaction|Trace", meta = (ClampMin = "0"))
 	float TraceInterval = 0.1f;
@@ -443,6 +485,50 @@ protected:
 	bool bInteractionEnabled = true;
 
 private:
+	/** 更新本地玩家接入；玩家、输入组件或世界变化后重建绑定。 */
+	void RefreshLocalUIContext();
+	/** 解析本地 Controller；Pawn 延迟被控制时由后续 Tick 重试。 */
+	APlayerController* ResolveLocalController() const;
+	/** 释放旧玩家的提示登记与框架委托。 */
+	void ReleaseUIContext();
+	/** 根据有效允许状态的变化取消操作或立即恢复检测。 */
+	void ApplyEffectiveInteractionChange(bool bWasAllowed);
+	UFUNCTION()
+	void HandleUIInputPolicyChanged(const FUIInputPolicy& Policy);
+	UFUNCTION()
+	void HandleUIViewStateChanged(FUIViewHandle Handle, EUIViewState PreviousState, EUIViewState State, EUICloseReason Reason);
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UUISubsystem> UISubsystem;
+	UPROPERTY(Transient)
+	TWeakObjectPtr<APlayerController> UIController;
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UWorld> UIWorld;
+	FUIViewHandle PromptView;
+	bool bUIInteractionBlocked = false;
+	bool bEndingPlay = false;
+
+	/** 按有效 Tag 去重，多项时打开菜单，否则保留默认请求流程。 */
+	void RequestDefaultInteraction(const FGameplayTag& DefaultTag, const FHitResult& Hit, float CompletedHoldTime = 0.f);
+	/** 登记并打开本次目标的原生选择器，不执行目标玩法。 */
+	void OpenInteractionOptions(const TArray<FInteractionOption>& Options);
+	/** 释放选择器登记与捕获上下文。 */
+	void DestroyInteractionOptions();
+	/** 清除本次候选快照；不会触发任何动作。 */
+	void ResetInteractionOptionsContext();
+	/** 检查当前 Pawn、目标与长按配置是否仍对应打开菜单时的快照。 */
+	bool IsOptionsContextCurrent() const;
+	/** 在真正派发及玩法校验回调后复检选中动作的当前上下文。 */
+	bool IsSelectedContextCurrent(const FInteractionContext& Context, const APawn* ExpectedPawn, float ExpectedHoldTime) const;
+	UPROPERTY(Transient)
+	TObjectPtr<UInteractionOptionsWidget> OptionsWidget;
+	FUIViewHandle OptionsView;
+	TWeakObjectPtr<APawn> OptionsPawn;
+	TWeakObjectPtr<AActor> OptionsTarget;
+	TWeakObjectPtr<UInteractableComponent> OptionsInteractable;
+	TArray<FGameplayTag> OptionsTags;
+	float OptionsHoldTime = 0.f;
+	bool bSelectingOption = false;
+	bool bOptionsCloseConfirmed = false;
 	// --------------------------------------------------------------------
 	// 内部状态
 	// --------------------------------------------------------------------
@@ -527,11 +613,14 @@ private:
 	 * - HalfAngleDeg：半角（度），bApplyAngleFilter=false 时忽略
 	 * - bApplyAngleFilter：是否按半角剔除方向外的候选
 	 * - OutCandidates：输出候选（按 Dot 降序排列，便于主焦点取首元素）
+	 * - Searcher：只读 UI 查询时额外忽略的当前 Pawn
+	 * - bRequireVisibility：只读 UI 查询时启用逐目标遮挡射线，游戏查询保留原规则
 	 */
 	void GatherOverlapCandidates(
 		FVector Origin, FVector Forward, float Radius, float HalfAngleDeg,
 		bool bApplyAngleFilter,
-		TArray<FInteractionCandidate>& OutCandidates) const;
+		TArray<FInteractionCandidate>& OutCandidates,
+		AActor* Searcher = nullptr, bool bRequireVisibility = false) const;
 
 	/** 计算检测原点与朝向（第一人称取 PlayerViewPoint，第三人称取 Actor 位置/Forward） */
 	void ComputeViewOriginAndForward(FVector& OutOrigin, FVector& OutForward) const;
@@ -546,10 +635,15 @@ private:
 	void CancelHoldInternal();
 
 	/** 根据当前状态构建 InteractionContext */
-	FInteractionContext BuildContext(const FGameplayTag& Tag, const FHitResult& Hit) const;
+	FInteractionContext BuildContext(const FGameplayTag& Tag, const FHitResult& Hit, UInteractableComponent* Interactable) const;
 
 	/** 客户端侧：校验并发送交互请求 */
 	void RequestInteraction(const FGameplayTag& InteractionTag, const FHitResult& Hit);
+
+	/** 共享请求链路；显式选项额外校验捕获 Pawn 与长按配置，不依赖已清除的世界焦点。 */
+	void DispatchInteractionContext(const FInteractionContext& Context, APawn* ExpectedPawn = nullptr, float ExpectedHoldTime = 0.f);
+	/** 保留原玩法校验与接受通知，选项请求在校验回调后再次检查上下文。 */
+	void ExecuteInteractionContext(const FInteractionContext& Context, APawn* ExpectedPawn = nullptr, float ExpectedHoldTime = 0.f);
 
 	// --------------------------------------------------------------------
 	// 网络 RPC

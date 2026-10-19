@@ -18,9 +18,18 @@
 			"Name": "InteractionPlugin",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "InteractionPluginTests",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit"
 		}
 	],
 	"Plugins": [
+		{
+			"Name": "UISystem",
+			"Enabled": true
+		},
 		{
 			"Name": "EnhancedInput",
 			"Enabled": true

@@ -8,7 +8,7 @@ class UInteractableComponent;
 /**
  * @brief 周围可交互物品的候选条目。
  *
- * 由 UInteractionComponent::GetNearbyInteractables() 产出，
+ * 由 UInteractionComponent::GetNearbyInteractables() 或 QueryNearbyInteractablesForUI() 产出，
  * 描述检测范围内的一个可交互对象及其相对玩家的几何关系。
  * 用于 UI（如轮盘、列表）展示"我周围有哪些可交互物品"。
  */

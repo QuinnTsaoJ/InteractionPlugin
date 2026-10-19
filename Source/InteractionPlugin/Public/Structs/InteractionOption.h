@@ -4,6 +4,8 @@
 #include "GameplayTagContainer.h"
 #include "InteractionOption.generated.h"
 
+class UTexture2D;
+
 /**
  * @brief 表示 InteractableComponent 中的单个交互选项。
  *

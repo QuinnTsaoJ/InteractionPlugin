@@ -5,6 +5,9 @@
 
 #include "Engine/Texture2D.h"                // UTexture2D（KeyIcon 资源类型）
 #include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/Overlay.h"
+#include "Components/OverlaySlot.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogInteractionWidget, Log, All);
 
@@ -21,42 +24,52 @@ void UInteractionWidget::NativeOnInitialized()
 {
 	Super::NativeOnInitialized();
 
-	// 初始隐藏——直到 OnFocusBegin 才显示
-	SetVisibility(ESlateVisibility::Collapsed);
+	SetIsFocusable(false);
+	SetPromptContentVisible(false);
+}
+
+void UInteractionWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+	if (UInteractionComponent* Component = InteractionComponent.Get())
+	{
+		// Slate 重建可以重新订阅；提示注销时由组件显式释放引用。
+		BindComponentEvents(Component);
+		SyncCurrentFocus();
+	}
+}
+
+TSharedRef<SWidget> UInteractionWidget::RebuildWidget()
+{
+	if (WidgetTree && (!PromptContent || WidgetTree->RootWidget != PromptContent))
+	{
+		UWidget* OriginalRoot = WidgetTree->RootWidget;
+		// 在实例中包裹原树，保留旧蓝图的四个绑定控件、布局和动画目标。
+		PromptContent = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass(), TEXT("InteractionPromptContent"));
+		WidgetTree->RootWidget = PromptContent;
+		if (OriginalRoot)
+		{
+			UOverlaySlot* ContentSlot = PromptContent->AddChildToOverlay(OriginalRoot);
+			ContentSlot->SetHorizontalAlignment(HAlign_Fill);
+			ContentSlot->SetVerticalAlignment(VAlign_Fill);
+		}
+	}
+	SetPromptContentVisible(bHasPromptContent);
+	return Super::RebuildWidget();
+}
+
+void UInteractionWidget::SetPromptContentVisible(bool bVisible)
+{
+	bHasPromptContent = bVisible;
+	if (PromptContent) { PromptContent->SetVisibility(bVisible ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed); }
 }
 
 void UInteractionWidget::NativeTick(const FGeometry& MyGeometry, float DeltaTime)
 {
 	Super::NativeTick(MyGeometry, DeltaTime);
 
-	// UI 模式检测：打开全屏 UI 时会显示鼠标光标，此时隐藏交互提示。
-	// 光标隐藏后恢复焦点驱动的可见性（有焦点则显示，无焦点保持折叠）。
-	if (const APlayerController* PC = GetOwningPlayer())
-	{
-		if (PC->bShowMouseCursor)
-		{
-			// 进入 UI 模式：强制隐藏交互提示
-			if (GetVisibility() != ESlateVisibility::Collapsed)
-			{
-				SetVisibility(ESlateVisibility::Collapsed);
-			}
-			bHiddenByUIMode = true;
-			return;
-		}
-		else if (bHiddenByUIMode)
-		{
-			// 退出 UI 模式：恢复焦点驱动的可见性
-			bHiddenByUIMode = false;
-			if (FocusedInteractable.IsValid())
-			{
-				SetVisibility(ESlateVisibility::Visible);
-			}
-			// 无焦点时保持 Collapsed（HandleFocusEnd 已设）
-		}
-	}
-
 	// 仅在可见 + 有焦点目标 + 正在长按时推进进度条
-	if (GetVisibility() != ESlateVisibility::Visible) { return; }
+	if (!bHasPromptContent) { return; }
 	if (!bIsHolding) { return; }
 
 	UInteractionComponent* Comp = InteractionComponent.Get();
@@ -74,6 +87,16 @@ void UInteractionWidget::NativeDestruct()
 	// 销毁前解绑所有委托，避免悬空
 	UnbindComponentEvents();
 	Super::NativeDestruct();
+}
+
+void UInteractionWidget::ReleaseInteractionComponent()
+{
+	UnbindComponentEvents();
+	InteractionComponent.Reset();
+	FocusedInteractable.Reset();
+	bIsHolding = false;
+	if (HoldProgressBar) { HoldProgressBar->SetPercent(0.0f); }
+	SetPromptContentVisible(false);
 }
 
 // =========================================================================
@@ -110,11 +133,11 @@ void UInteractionWidget::BindComponentEvents(UInteractionComponent* InComponent)
 {
 	if (!InComponent) { return; }
 
-	InComponent->OnFocusBegin.AddDynamic(this, &ThisClass::HandleFocusBegin);
-	InComponent->OnFocusEnd.AddDynamic(this, &ThisClass::HandleFocusEnd);
-	InComponent->OnHoldStarted.AddDynamic(this, &ThisClass::HandleHoldStarted);
-	InComponent->OnHoldCanceled.AddDynamic(this, &ThisClass::HandleHoldCanceled);
-	InComponent->OnHoldCompleted.AddDynamic(this, &ThisClass::HandleHoldCompleted);
+	InComponent->OnFocusBegin.AddUniqueDynamic(this, &ThisClass::HandleFocusBegin);
+	InComponent->OnFocusEnd.AddUniqueDynamic(this, &ThisClass::HandleFocusEnd);
+	InComponent->OnHoldStarted.AddUniqueDynamic(this, &ThisClass::HandleHoldStarted);
+	InComponent->OnHoldCanceled.AddUniqueDynamic(this, &ThisClass::HandleHoldCanceled);
+	InComponent->OnHoldCompleted.AddUniqueDynamic(this, &ThisClass::HandleHoldCompleted);
 }
 
 void UInteractionWidget::UnbindComponentEvents()
@@ -202,8 +225,7 @@ void UInteractionWidget::HandleFocusBegin(AActor* TargetActor, UInteractableComp
 		}
 	}
 
-	// 显示 Widget
-	SetVisibility(ESlateVisibility::Visible);
+	SetPromptContentVisible(true);
 
 	// 触发蓝图淡入钩子
 	OnPromptShown();
@@ -211,8 +233,7 @@ void UInteractionWidget::HandleFocusBegin(AActor* TargetActor, UInteractableComp
 
 void UInteractionWidget::HandleFocusEnd(AActor* TargetActor, UInteractableComponent* Interactable)
 {
-	// 隐藏 Widget（Collapsed 脱离排版、不 Tick）
-	SetVisibility(ESlateVisibility::Collapsed);
+	SetPromptContentVisible(false);
 
 	// 清空焦点缓存
 	FocusedInteractable = nullptr;

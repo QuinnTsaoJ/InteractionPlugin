@@ -450,8 +450,10 @@ public:
 | `Server_RequestInteraction(FInteractionContext)` | Server RPC | 服务端校验并执行 |
 | `Multicast_InteractionAccepted(FInteractionContext)` | NetMulticast | 广播交互接受事件 |
 | `Multicast_InteractionRejected(FInteractionContext)` | NetMulticast | 广播交互拒绝事件 |
-| `TryInteract()` | Client | 蓝图可调用的默认交互入口 |
+| `TryInteract()` | Client | 多有效选项打开原生选择器，否则沿用默认 Tag |
 | `TryInteractWithTag(FGameplayTag)` | Client | 蓝图可调用，指定 Tag 交互 |
+| `SelectInteractionOption(FGameplayTag)` | Client | 选择前台菜单动作，关闭已提交并复检上下文后发送；不表示玩法成功 |
+| `CancelInteractionOptions()` | Client | 关闭选择器并清除捕获上下文，不执行 |
 | `ForceRefreshFocus()` | Client | 强制立即刷新焦点检测 |
 | `SetTraceMode(EInteractionTraceMode)` | Client | 切换检测模式，广播 OnTraceModeChanged 并强制刷新焦点 |
 | `GetTraceMode()` | Client | 返回当前检测模式 |
@@ -528,7 +530,13 @@ UninitializeComponent()
 
 ### 8.3 UInteractionWidget
 
-挂载对象：由 UInteractionComponent 在 BeginPlay 创建并管理的交互提示 UI（蓝图派生类提供视觉）。
+挂载对象：由 UInteractionComponent 解析本地 PlayerController 创建并调用 NativeInit 初始化的交互提示 UI（蓝图派生类提供视觉）。组件单向依赖 UISystem，以 InteractionPlugin.Prompt 登记为无父会话的 HUD，不在菜单期间显示、不接收鼠标、不暂停世界；由框架管理挂载与注销。旧 InteractionWidgetZOrder 字段只用于资产兼容。
+
+接入与 Widget 类配置无关：首次读取 GetEffectiveInputPolicy，并订阅 OnInputPolicyChanged。SetUIInteractionBlocked 保存 bBlockGameActions，业务状态 bInteractionEnabled 仍仅由原业务入口修改；有效允许为二者共同判定，UI 状态变化不触发 OnInteractionEnabledChanged。禁止状态先提交，再取消长按和清理世界焦点、描边；Tick、点按、带 Tag 交互、长按与周围查询共用该条件，派发及玩法执行前重复检查回调造成的策略变化。已执行交互的接受与完成通知保持原语义。
+
+Pawn 本地控制及 LocalPlayer 未就绪时逐帧尝试接入。Controller、世界或输入组件改变时释放旧绑定；世界重建使提示句柄失效后重新登记。EndPlay 先阻止重入，再显式解绑 UI 通知、提示的组件通知与 Enhanced Input，并由 UISystem 注销提示。
+
+UInteractionWidget::RebuildWidget 在实例内以全尺寸 Overlay 包裹原根控件，作为 InteractionPromptContent。既有四个控件、原布局和动画目标保留，二进制蓝图资产无需迁移。焦点只改变该内容容器的 Visibility，顶层 Widget 的 Visibility 由框架决定；NativeTick 只更新长按进度，不再通过鼠标显隐推断 UI 模式。蓝图视觉钩子不得覆盖顶层可见性或自行挂载／移除提示。
 
 **必需控件契约（meta=BindWidget）：**
 
@@ -761,3 +769,29 @@ PrivateDependencyModuleNames.AddRange(new string[] {
 ```
 
 无需额外插件依赖。
+
+## 17. UI 前台只读空间查询
+
+`QueryNearbyInteractablesForUI(APawn* Searcher)` 与游戏 `GetNearbyInteractables` 分离入口门控，复用同一 Overlap 收集器。UI 入口检查手动业务开关、组件／Owner 生命周期，以及 Searcher 是否为所属本地控制器当前控制的 Pawn；只跳过 UI 输入阻止，不改变该阻止状态。每次读取当前控制关系，不缓存 Searcher 或候选。
+
+UI 查询从 Pawn 本体位置做 `TraceDistance` 整球查询，发现使用原 `TraceChannel`，不套第三人称扇形。共享收集器按 Actor 去重，筛选启用且已注册的可交互组件；UI 调用额外启用 `UIQueryVisibilityChannel`（默认 Visibility）的逐目标遮挡射线。先命中目标自身或无遮挡即可返回，其他阻挡排除，最终按距离升序。原游戏调用不启用可见性参数，原有效允许门控、焦点与长按行为保持。
+
+该入口是实时只读发现，不派发玩法钩子、交互事件或周围查询事件，不创建提示或更改输入、焦点与库存。空间候选不等于业务操作授权。
+
+依据 [背包侧接入回执](../../../InventorySystem/docs/背包发现-交互模块接入工单.md)，InventoryUI 的 `UInventoryInteractionComponent` 直接调用此入口：每次先查当前 PlayerController 的交互组件，未找到时再查当前 Pawn，传入当前 Pawn，并将本次候选 Owner 去重后交给背包处理。不缓存组件，不通过项目发现提供者接口，也不维护世界容器登记表。旧 `InventoryDiscoveryProvider`／`QueryNearbyInventoryActors` 桥接方案已撤销，原有 `InventoryProviderInterface` 保留。
+
+InventoryUI 对 InteractionPlugin 使用私有编译依赖，InventorySystem.uplugin 声明插件依赖；InteractionPlugin 不反向增加背包依赖，库存数据核心 InventorySystem 模块不增加 InteractionPlugin 或 UISystem 依赖。背包负责实际库存提取、地面物品投影、业务访问校验及空结果撤销。
+
+交互聚焦验证复用日常工程和现有测试模块，通过进程内原生 GameMode 世界验证真实空间查询，不生成独立工程或资产。背包侧回执记录直接接入的 DebugGame 构建及 42 项自动化通过；现有关卡人工 PIE 尚待验收。2026-10-06 的背包接入文档同步仅修改交互插件文档，没有执行蓝图清理或重跑构建与测试；本轮 X01 范围见下节。
+
+## 18. 原生多选项菜单（UI-011-X01）
+
+`RequestDefaultInteraction` 对 `Options` 的有效 Tag 去重。多项使用原生 `UInteractionOptionsWidget` 展示，其 `InteractionPlugin.Options` 会话固定为 Menu／MainMenu、BackAction=Close、不暂停世界；单项保留默认请求，长按目标在原累积完成后进入该判断。原显式 Tag 调用不自动显示选择器，不新增按键、输入映射或业务插件依赖。
+
+组件用弱引用保存当前 Pawn、目标 Actor／组件，另保存允许选择的 Tag 快照及 HoldTime。自己的 UI 输入阻止照常清除世界焦点与描边；提交不依赖该旧焦点，也不重新写回它。只有自己的会话 Active 且为前台时允许选择；先同步 CloseView(Completed)，等关闭已提交并排空本次框架命令后，确认没有其他前台阻止、Pawn 未替换、目标与选项仍有效、HoldTime 未改变且目标仍符合现有焦点检测，再发送捕获目标的明确 Tag。
+
+关闭为 Queued 时不派发且不保留延迟动作，返回 false。取消、Replaced、WorldChanged、业务禁用、目标禁用与 Owner 结束仅清理；更高层挂起时不接受选择。共享 Dispatch／Execute 链路保留既有 Sent、CanInteract、目标 void 请求及 Accepted／Completed；选项在 Sent 和 CanInteract 后再次复检。目标业务自行报告任务或库存结果，不能把请求通知解释为交付成功。
+
+选择器关闭即释放登记；无提示资产时 Prompt 使用无控件 HUD 保留生命周期通知，关闭回调中排队的读档仍能撤销选择。WorldChanged 清理旧 Prompt 登记，避免同图恢复重新登记时残留 ViewId；不新增实际控件或输入策略。
+
+本轮仅落盘源码及三个 `InteractionPlugin.Options.*` 聚焦用例，尚未运行 UE、UBT、自动化或真实 PIE。详细文件、接入与待验证项见 [X01 实施回执](../../docs/UI-011-X01_实施回执.md)。

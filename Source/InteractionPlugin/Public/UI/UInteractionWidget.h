@@ -9,23 +9,24 @@
 
 class UInteractionComponent;
 class UInteractableComponent;
+class UOverlay;
 
 /**
  * @brief 交互提示 Widget 基类。
  *
- * 由 UInteractionComponent 在 BeginPlay 创建并管理生命周期。
+ * 由 UInteractionComponent 在本地玩家就绪时创建，交由 UISystem 管理挂载。
  * 通过 meta=(BindWidget) 强制蓝图派生类提供四个必需控件：
  *   - ActionText (UTextBlock)：动作描述
  *   - KeyIcon (UImage)：交互动作提示图标（来自 InteractionComponent 配置的 InteractActionIcon）
  *   - HoldProgressBar (UProgressBar)：长按进度条
  *   - InteractionTypeText (UTextBlock)：交互类型说明（点击 / 长按）
  *
- * 事件驱动可见性：OnFocusBegin 显示，OnFocusEnd 隐藏（Collapsed）。
+ * 焦点只驱动内部内容容器的显隐；外层遮挡由 UISystem 管理。
  * 可见时由 NativeTick 推进长按进度条。
  * InteractionTypeText 在 OnFocusBegin 时依据目标 HoldTime 填充文案：
  * HoldTime>0 显示 HoldText（长按），否则显示 ClickText（点击）。
  *
- * 蓝图只需设计视觉、提供三个必需控件、可选重写视觉钩子事件。
+ * 蓝图只需设计视觉、提供四个必需控件、可选重写视觉钩子事件。
  */
 UCLASS(ClassGroup = "Interaction", Abstract)
 class INTERACTIONPLUGIN_API UInteractionWidget : public UUserWidget
@@ -40,6 +41,8 @@ public:
 	// --------------------------------------------------------------------
 
 	virtual void NativeOnInitialized() override;
+	virtual void NativeConstruct() override;
+	virtual TSharedRef<SWidget> RebuildWidget() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float DeltaTime) override;
 	virtual void NativeDestruct() override;
 
@@ -50,7 +53,7 @@ public:
 	/**
 	 * @brief 组件创建 Widget 后自动调用，注入组件引用并订阅事件。
 	 *
-	 * 内部行为：保存组件弱引用 → 绑定 4 个事件 → SyncCurrentFocus → OnWidgetCreated。
+	 * 内部行为：保存组件弱引用 → 绑定 5 个事件 → SyncCurrentFocus → OnWidgetCreated。
 	 * 幂等：重复调用先解绑旧的再绑新的。
 	 *
 	 * 蓝图不应直接调用——由 UInteractionComponent::CreateInteractionWidget 调用。
@@ -59,6 +62,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Interaction",
 		meta = (BlueprintInternalUseOnly = "true"))
 	void NativeInit(UInteractionComponent* InComponent);
+
+	/** 显式释放组件订阅；注销提示时不依赖 Slate 延迟析构。 */
+	void ReleaseInteractionComponent();
 
 	// --------------------------------------------------------------------
 	// 必需控件（BindWidget 契约）
@@ -157,6 +163,11 @@ private:
 	/** 是否正在长按累积中 */
 	bool bIsHolding = false;
 
-	/** 是否因 UI 模式（鼠标光标显示）被强制隐藏；光标隐藏后据此恢复焦点驱动的可见性 */
-	bool bHiddenByUIMode = false;
+	/** 运行时包裹原控件树；外层可见性由 UISystem 管理，目标只控制内容。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UOverlay> PromptContent = nullptr;
+	/** 内容存在时允许显示；控件树重建后保持当前焦点状态。 */
+	bool bHasPromptContent = false;
+	/** 更新内容容器，不写顶层 Widget 的可见性。 */
+	void SetPromptContentVisible(bool bVisible);
 };

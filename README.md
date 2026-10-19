@@ -45,14 +45,14 @@ UE5 事件驱动、组件化的交互框架。负责发现可交互对象、管�
 - **双检测模式**:第一人称(视点射线/球扫)、第三人称(扇形 Overlap + 点积取主焦点),运行时可切换
 - **焦点管理**:自动焦点进入/离开/切换事件,目标自动描边(Custom Depth Stencil)
 - **点按 / 长按交互**:`HoldTime` 区分类型,长按带进度累积、松手/失焦自动取消
-- **多交互选项**:单对象支持多个 GameplayTag 选项,默认 Tag 回退
+- **多交互选项**:多个有效唯一 Tag 经现有交互键打开 UISystem 原生菜单；单项保留默认 Tag 流程
 - **网络校验**:客户端请求 → 服务端 `CanInteract` 校验 → Multicast 广播接受/拒绝
 - **交互冷却**:`CooldownTime > 0` 时交互被接受后进入冷却,UI 可读取剩余时间
 - **周围检测**:按需查询范围内可交互物数组,按距离排序,主焦点标记
 - **总开关**:`SetInteractionEnabled` 一键静默交互(过场/UI/对话场景)
 - **交互提示 UI**:框架自动创建/管理 Widget 生命周期,事件驱动显隐,长按进度条自动推进
 - **Enhanced Input 自动绑定**:BeginPlay 自动从本地控制 Owner 取 InputComponent 绑定三个 Action,Tick 兜底补绑,服务端自动跳过
-- **UI 模式感知**:鼠标光标显示时(如打开背包)自动隐藏交互提示,光标隐藏后恢复
+- **UISystem 接入**:本地玩家提示登记为 HUD，输入策略阻止时取消长按、清除焦点与描边；UI 退出保留原业务开关
 
 ## 快速开始
 
@@ -87,5 +87,9 @@ UE5 事件驱动、组件化的交互框架。负责发现可交互对象、管�
 
 ## 相关文档
 
+- [UI-011-X01 实施回执](docs/UI-011-X01_实施回执.md) — 原生交互选项、关闭后派发规则与待集中验证范围
+- [背包发现交互模块回执](docs/背包发现_交互模块实施回执.md) — UI 前台只读空间查询、验证证据及 InventoryUI 直接接入状态
+- [背包发现项目验收工单](docs/背包发现_项目蓝图接入工单.md) — 旧发现接口桥接已撤销，实际碰撞配置与现有关卡人工 PIE 待验收
+- [UI-001 隔离 PIE 验收指南](docs/UI-001_PIE验收指南.md) — 独立工程、Controller/Pawn 关卡、键位与验收步骤
 - `Source/InteractionPlugin/UsageGuide.md` — 从零接入的完整使用教程
 - `Source/InteractionPlugin/TechnicalDesignDocument.md` — 技术设计文档

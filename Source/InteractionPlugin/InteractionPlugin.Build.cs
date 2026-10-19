@@ -12,15 +12,16 @@ public class InteractionPlugin : ModuleRules
 			"CoreUObject",
 			"Engine",
 			"GameplayTags",
+			"UISystem",
+			"UMG",
+			"EnhancedInput",
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"Slate",
 			"SlateCore",
-			"UMG",
 			"InputCore",
-			"EnhancedInput",
 		});
 	}
 }
